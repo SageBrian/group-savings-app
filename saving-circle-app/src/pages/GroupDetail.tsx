@@ -224,6 +224,9 @@ const GroupDetail = () => {
     setContributionDescription('');
     setContributionOpen(false);
   };
+
+
+  
   
   const handleWithdrawalRequest = () => {
     const amount = parseFloat(withdrawalAmount);
@@ -236,6 +239,8 @@ const GroupDetail = () => {
       toast.error('Withdrawal amount exceeds available funds');
       return;
     }
+
+    
     
     requestWithdrawal(group.id, amount, withdrawalReason || undefined);
     setWithdrawalAmount('');
@@ -243,13 +248,36 @@ const GroupDetail = () => {
     setWithdrawalOpen(false);
   };
   
-  const handleApproveWithdrawal = (requestId: string) => {
-    approveWithdrawal(group.id, requestId);
-  };
+
+
   
-  const handleRejectWithdrawal = (requestId: string) => {
+  // In GroupDetail.tsx, update these functions:
+
+const handleApproveWithdrawal = (requestId: string) => {
+  console.log("Approving withdrawal:", requestId);
+  console.log("Group withdrawal requests:", group.withdrawalRequests);
+  
+  // Make sure the withdrawal request exists before calling the function
+  if (group.withdrawalRequests && group.withdrawalRequests.some(req => req.id === requestId)) {
+    approveWithdrawal(group.id, requestId);
+  } else {
+    console.error("Request ID not found in group withdrawal requests");
+    toast.error("Error: Could not find withdrawal request");
+  }
+};
+
+const handleRejectWithdrawal = (requestId: string) => {
+  console.log("Rejecting withdrawal:", requestId);
+  console.log("Group withdrawal requests:", group.withdrawalRequests);
+  
+  // Make sure the withdrawal request exists before calling the function
+  if (group.withdrawalRequests && group.withdrawalRequests.some(req => req.id === requestId)) {
     rejectWithdrawal(group.id, requestId);
-  };
+  } else {
+    console.error("Request ID not found in group withdrawal requests");
+    toast.error("Error: Could not find withdrawal request");
+  }
+};
   
   const handleLeaveGroup = () => {
     leaveGroup(group.id);

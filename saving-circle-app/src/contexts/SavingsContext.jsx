@@ -315,163 +315,204 @@ export const SavingsProvider = ({ children }) => {
   };
 
   // Approve a withdrawal request (renamed from processWithdrawalRequest to match TS version)
-  const approveWithdrawal = async (groupId, requestId) => {
-    if (!isAuthenticated) {
-      toast.error('You must be logged in to approve a withdrawal');
+  // Replace the approveWithdrawal function in SavingsContext.jsx with this:
+// Update these functions in SavingsContext.jsx
+
+const approveWithdrawal = async (groupId, requestId) => {
+  if (!isAuthenticated) {
+    toast.error('You must be logged in to approve a withdrawal');
+    return;
+  }
+
+  try {
+    // Find the group in userGroups
+    const groupIndex = userGroups.findIndex(g => g.id === groupId);
+    
+    if (groupIndex === -1) {
+      toast.error('Group not found');
       return;
     }
-  
+
+    const group = userGroups[groupIndex];
+    
+    // First, try to get the request directly from API
     try {
-      // Find the group in userGroups
-      const groupIndex = userGroups.findIndex(g => g.id === groupId);
-      
-      if (groupIndex === -1) {
-        toast.error('Group not found');
-        return;
-      }
-  
-      // Update userGroups with the approved withdrawal
-      const updatedGroups = [...userGroups];
-      const updatedGroup = { ...updatedGroups[groupIndex] };
-      
-      // Ensure withdrawalRequests array exists
-      if (!updatedGroup.withdrawalRequests) {
-        updatedGroup.withdrawalRequests = [];
-        toast.error('No withdrawal requests found');
-        return;
-      }
-      
-      // Find the withdrawal request
-      const requestIndex = updatedGroup.withdrawalRequests.findIndex(r => r.id === requestId);
-      
-      if (requestIndex === -1) {
-        toast.error('Withdrawal request not found');
-        return;
-      }
-      
-      // Update the status
-      const updatedRequests = [...updatedGroup.withdrawalRequests];
-      updatedRequests[requestIndex] = {
-        ...updatedRequests[requestIndex],
-        status: 'approved'
-      };
-      
-      // Update the withdrawal requests
-      updatedGroup.withdrawalRequests = updatedRequests;
-      
-      // Deduct the amount from current amount (since it's now approved)
-      const requestAmount = updatedRequests[requestIndex].amount;
-      updatedGroup.currentAmount = Math.max(0, updatedGroup.currentAmount - requestAmount);
-      
-      // Add a new transaction for the withdrawal
-      if (!updatedGroup.transactions) {
-        updatedGroup.transactions = [];
-      }
-      
-      updatedGroup.transactions = [
-        ...updatedGroup.transactions,
-        {
-          id: `temp-withdrawal-${Date.now()}`,
-          groupId,
-          userId: updatedRequests[requestIndex].userId,
-          userName: updatedRequests[requestIndex].userName,
-          amount: requestAmount,
-          type: 'withdrawal',
-          date: new Date().toISOString(),
-          description: `Approved withdrawal: ${updatedRequests[requestIndex].reason || ''}`
-        }
-      ];
-      
-      // Update the group in the array
-      updatedGroups[groupIndex] = updatedGroup;
-      
-      // Update state immediately for UI responsiveness
-      setUserGroups(updatedGroups);
-  
-      // Make API call
       const response = await groupsService.processWithdrawal(requestId, 'approved');
       
       if (response.data) {
-        // Refresh group data after approval to get server-generated IDs
+        // Refresh group data after approval
         await fetchUserGroups();
         toast.success('Withdrawal request approved');
+        return;
       }
-    } catch (error) {
-      console.error('Error approving withdrawal:', error);
-      toast.error('Failed to approve withdrawal. Please try again.');
-      
-      // Revert the optimistic update on error
-      await fetchUserGroups();
+    } catch (apiError) {
+      console.error('API error approving withdrawal:', apiError);
+      // Continue with UI-optimistic update as fallback
     }
-  };
+    
+    // Clone everything to avoid direct state mutation
+    const updatedGroups = [...userGroups];
+    const updatedGroup = { ...updatedGroups[groupIndex] };
+    
+    // Ensure both properties exist (handle both naming conventions)
+    if (!updatedGroup.withdrawalRequests && updatedGroup.withdrawals) {
+      // Map to the expected format if only withdrawals exists
+      updatedGroup.withdrawalRequests = updatedGroup.withdrawals.map(w => ({
+        id: w.id || '',
+        groupId: groupId,
+        userId: w.user?.id || '',
+        userName: w.user?.name || 'Unknown User',
+        amount: Number(w.amount) || 0,
+        date: w.created_at || new Date().toISOString(),
+        status: w.status || 'pending',
+        reason: w.reason || ''
+      }));
+    } else if (!updatedGroup.withdrawalRequests) {
+      updatedGroup.withdrawalRequests = [];
+    }
+    
+    if (!updatedGroup.transactions) updatedGroup.transactions = [];
+    
+    // Find the request in either withdrawalRequests or withdrawals
+    const request = updatedGroup.withdrawalRequests.find(r => r.id === requestId);
+    
+    if (!request) {
+      console.error('Withdrawal request not found locally. ID:', requestId);
+      toast.error('Could not find withdrawal request locally');
+      // Try refreshing data from server
+      await fetchUserGroups();
+      return;
+    }
+    
+    // Update the status of the specific request
+    updatedGroup.withdrawalRequests = updatedGroup.withdrawalRequests.map(req => 
+      req.id === requestId ? { ...req, status: 'approved' } : req
+    );
+    
+    // Get the request amount
+    const requestAmount = request.amount || 0;
+    
+    // Deduct the amount from current amount
+    updatedGroup.currentAmount = Math.max(0, updatedGroup.currentAmount - requestAmount);
+    
+    // Add a new transaction for the withdrawal
+    updatedGroup.transactions.push({
+      id: `withdrawal-${Date.now()}`,
+      groupId,
+      userId: request.userId,
+      userName: request.userName,
+      amount: requestAmount,
+      type: 'withdrawal',
+      date: new Date().toISOString(),
+      description: `Approved withdrawal: ${request.reason || ''}`
+    });
+    
+    // Update the group in the array
+    updatedGroups[groupIndex] = updatedGroup;
+    
+    // Update state immediately for UI responsiveness
+    setUserGroups(updatedGroups);
+    toast.success('Withdrawal request approved (optimistic update)');
+    
+    // Refresh data from server to ensure consistency
+    setTimeout(() => fetchUserGroups(), 1000);
+    
+  } catch (error) {
+    console.error('Error approving withdrawal:', error);
+    toast.error('Failed to approve withdrawal. Please try again.');
+    
+    // Revert the optimistic update on error
+    await fetchUserGroups();
+  }
+};
 
-  // Reject a withdrawal request (new function to match TS version)
-  const rejectWithdrawal = async (groupId, requestId) => {
-    if (!isAuthenticated) {
-      toast.error('You must be logged in to reject a withdrawal');
+const rejectWithdrawal = async (groupId, requestId) => {
+  if (!isAuthenticated) {
+    toast.error('You must be logged in to reject a withdrawal');
+    return;
+  }
+
+  try {
+    // Find the group in userGroups
+    const groupIndex = userGroups.findIndex(g => g.id === groupId);
+    
+    if (groupIndex === -1) {
+      toast.error('Group not found');
       return;
     }
 
+    const group = userGroups[groupIndex];
+    
+    // First, try to get the request directly from API
     try {
-      // Find the group in userGroups
-      const groupIndex = userGroups.findIndex(g => g.id === groupId);
-      
-      if (groupIndex === -1) {
-        toast.error('Group not found');
-        return;
-      }
-
-      // Update userGroups with the rejected withdrawal
-      const updatedGroups = [...userGroups];
-      const updatedGroup = { ...updatedGroups[groupIndex] };
-      
-      // Ensure withdrawalRequests array exists
-      if (!updatedGroup.withdrawalRequests) {
-        updatedGroup.withdrawalRequests = [];
-        toast.error('No withdrawal requests found');
-        return;
-      }
-      
-      // Find the withdrawal request
-      const requestIndex = updatedGroup.withdrawalRequests.findIndex(r => r.id === requestId);
-      
-      if (requestIndex === -1) {
-        toast.error('Withdrawal request not found');
-        return;
-      }
-      
-      // Update the status
-      const updatedRequests = [...updatedGroup.withdrawalRequests];
-      updatedRequests[requestIndex] = {
-        ...updatedRequests[requestIndex],
-        status: 'rejected'
-      };
-      
-      // Update the withdrawal requests
-      updatedGroup.withdrawalRequests = updatedRequests;
-      
-      // Update the group in the array
-      updatedGroups[groupIndex] = updatedGroup;
-      
-      // Update state immediately for UI responsiveness
-      setUserGroups(updatedGroups);
-
-      // Make API call
       const response = await groupsService.processWithdrawal(requestId, 'rejected');
       
       if (response.data) {
-        // Refresh group data after rejection to get server-generated IDs
+        // Refresh group data after rejection
         await fetchUserGroups();
         toast.success('Withdrawal request rejected');
+        return;
       }
-    } catch (error) {
-      console.error('Error rejecting withdrawal:', error);
-      toast.error('Failed to reject withdrawal. Please try again.');
-      
-      // Revert the optimistic update on error
-      await fetchUserGroups();
+    } catch (apiError) {
+      console.error('API error rejecting withdrawal:', apiError);
+      // Continue with UI-optimistic update as fallback
     }
-  };
+    
+    // Clone everything to avoid direct state mutation
+    const updatedGroups = [...userGroups];
+    const updatedGroup = { ...updatedGroups[groupIndex] };
+    
+    // Ensure both properties exist (handle both naming conventions)
+    if (!updatedGroup.withdrawalRequests && updatedGroup.withdrawals) {
+      // Map to the expected format if only withdrawals exists
+      updatedGroup.withdrawalRequests = updatedGroup.withdrawals.map(w => ({
+        id: w.id || '',
+        groupId: groupId,
+        userId: w.user?.id || '',
+        userName: w.user?.name || 'Unknown User',
+        amount: Number(w.amount) || 0,
+        date: w.created_at || new Date().toISOString(),
+        status: w.status || 'pending',
+        reason: w.reason || ''
+      }));
+    } else if (!updatedGroup.withdrawalRequests) {
+      updatedGroup.withdrawalRequests = [];
+    }
+    
+    // Find the request in withdrawalRequests
+    const request = updatedGroup.withdrawalRequests.find(r => r.id === requestId);
+    
+    if (!request) {
+      console.error('Withdrawal request not found locally. ID:', requestId);
+      toast.error('Could not find withdrawal request locally');
+      // Try refreshing data from server
+      await fetchUserGroups();
+      return;
+    }
+    
+    // Update the status of the specific request
+    updatedGroup.withdrawalRequests = updatedGroup.withdrawalRequests.map(req => 
+      req.id === requestId ? { ...req, status: 'rejected' } : req
+    );
+    
+    // Update the group in the array
+    updatedGroups[groupIndex] = updatedGroup;
+    
+    // Update state immediately for UI responsiveness
+    setUserGroups(updatedGroups);
+    toast.success('Withdrawal request rejected (optimistic update)');
+    
+    // Refresh data from server to ensure consistency
+    setTimeout(() => fetchUserGroups(), 1000);
+    
+  } catch (error) {
+    console.error('Error rejecting withdrawal:', error);
+    toast.error('Failed to reject withdrawal. Please try again.');
+    
+    // Revert the optimistic update on error
+    await fetchUserGroups();
+  }
+};
 
   // For backward compatibility with existing code
   const processWithdrawalRequest = async (groupId, requestId, status) => {
